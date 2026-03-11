@@ -3,27 +3,7 @@
 
 #include "config.h"
 
-bool waterLatchedOn = false;
-unsigned long previousMillis = 0;
-
-LightMode lightMode = MANUAL;
-unsigned long lightOnDuration = 0;
-unsigned long lightOffDuration = 0;
-bool lightPhaseOn = false;
-unsigned long lightPhaseTimer = 0;
-unsigned long customOnDuration = 18 * HOUR;
-unsigned long customOffDuration = 6 * HOUR;
-
-TimerControl waterTimer;
-TimerControl pumpTimer;
-TimerControl sprayTimer;
-TimerControl aux1Timer;
-TimerControl aux2Timer;
-
-bool pumpAutoStopArmed = false;
-unsigned long pumpArmedAtMs = 0;
-unsigned long lowLevelSeenAtMs = 0;
-
+// If your relay logic is inverted on your board, flip these:
 static inline void relayWrite(int ch, bool on) {
   digitalWrite(RELAY_PINS[ch], on ? HIGH : LOW);
 }
@@ -95,7 +75,7 @@ static void applyLightMode(LightMode mode) {
 static void startTimedOutput(int ch, TimerControl &t, unsigned long durationMs) {
   relayWrite(ch, true);
   t.state = true;
-  t.duration = durationMs;
+  t.duration = durationMs; // 0 means "no timer, stays on"
   t.elapsed = 0;
 }
 
@@ -129,12 +109,14 @@ static long lightRemainingSeconds() {
   return (long)((phaseTotal - lightPhaseTimer) / 1000);
 }
 
+// --------- Water level sensor helpers ----------
 static bool isLowLevelRaw() {
   int v = digitalRead(PUMP_LEVEL_PIN);
   if (LOW_LEVEL_IS_LOW) return (v == LOW);
   return (v == HIGH);
 }
 
+// Returns true only if low-level has been stable for LEVEL_DEBOUNCE_MS
 static bool isLowLevelStable(unsigned long nowMs) {
   if (isLowLevelRaw()) {
     if (lowLevelSeenAtMs == 0) lowLevelSeenAtMs = nowMs;
@@ -157,8 +139,9 @@ static void disarmPumpAutoStop() {
   lowLevelSeenAtMs = 0;
 }
 
+// --------- Water latch helpers ----------
 static void startWaterLatchedOn() {
-  startTimedOutput(CH_WATER, waterTimer, 0);
+  startTimedOutput(CH_WATER, waterTimer, 0); // 0 = stays on
   waterLatchedOn = true;
 }
 
@@ -170,6 +153,8 @@ static void stopWaterLatchedOff() {
 static void stopPumpBecauseLowLevel() {
   stopTimedOutput(CH_PUMP, pumpTimer);
   disarmPumpAutoStop();
+
+  // Low level event triggers WATER ON (latched)
   startWaterLatchedOn();
 }
 
@@ -181,6 +166,7 @@ static bool isWaterManualOnActive() {
   return digitalRead(WATER_MANUAL_ON_PIN) == LOW;
 }
 
+// --------- Query parsing helpers ----------
 static String getQueryParam(const String &request, const String &key) {
   int qPos = request.indexOf('?');
   if (qPos < 0) return "";

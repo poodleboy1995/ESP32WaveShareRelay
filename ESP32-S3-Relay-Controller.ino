@@ -6,11 +6,13 @@
 void setup() {
   Serial.begin(115200);
 
+  // Init relay pins
   for (int i = 0; i < 6; i++) {
     pinMode(RELAY_PINS[i], OUTPUT);
     digitalWrite(RELAY_PINS[i], LOW);
   }
 
+  // Sensor inputs
   pinMode(PUMP_LEVEL_PIN, INPUT_PULLUP);
   pinMode(WATER_OFF_PIN, INPUT_PULLUP);
   pinMode(WATER_MANUAL_OFF_PIN, INPUT_PULLUP);
@@ -18,11 +20,11 @@ void setup() {
 
   delay(500);
 
+  // Connect WiFi
   Serial.print("Connecting to ");
   Serial.println(ssid);
   WiFi.mode(WIFI_STA);
   WiFi.begin(ssid, password);
-
   while (WiFi.status() != WL_CONNECTED) {
     delay(400);
     Serial.print(".");
@@ -39,9 +41,11 @@ void setup() {
 void loop() {
   unsigned long now = millis();
 
+  // ---------------- TIMERS ----------------
   if (now - previousMillis >= interval) {
     previousMillis = now;
 
+    // Light auto schedule
     if (lightMode != MANUAL) {
       lightPhaseTimer += interval;
       unsigned long phaseTotal = lightPhaseOn ? lightOnDuration : lightOffDuration;
@@ -52,6 +56,7 @@ void loop() {
       }
     }
 
+    // One-shot timers
     tickTimer(CH_WATER, waterTimer, interval);
     tickTimer(CH_PUMP,  pumpTimer,  interval);
     tickTimer(CH_SPRAY, sprayTimer, interval);
@@ -59,6 +64,7 @@ void loop() {
     tickTimer(CH_AUX2,  aux2Timer,  interval);
   }
 
+  // ---------------- PUMP AUTO-STOP (sensor driven) ----------------
   if (pumpAutoStopArmed && relayRead(CH_PUMP)) {
     if (isLowLevelStable(now)) {
       Serial.println("Low level reached -> stopping pump + latching WATER ON");
@@ -73,12 +79,18 @@ void loop() {
     lowLevelSeenAtMs = 0;
   }
 
+  // ---------------- WATER OFF INPUT (latch release) ----------------
   if (waterLatchedOn) {
     if (digitalRead(WATER_OFF_PIN) == LOW) {
       stopWaterLatchedOff();
     }
   }
 
+  // ---------------- WATER CONTROL PRIORITY ----------------
+  // Priority:
+  // 1) Emergency OFF (GPIO40)
+  // 2) Manual ON (GPIO39)
+  // 3) Normal timer/latch logic
   if (isWaterManualOffActive()) {
     relayWrite(CH_WATER, false);
   } else if (isWaterManualOnActive()) {
@@ -87,5 +99,6 @@ void loop() {
     relayWrite(CH_WATER, waterTimer.state);
   }
 
+  // ---------------- WEB SERVER ----------------
   handleWebServer();
 }
