@@ -1,0 +1,292 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1.0">
+  <title>ESP32-S3-Relay-6CH Panel [PREVIEW]</title>
+  <style>
+    body{font-family:'Courier New',monospace;background:#1f1f1f;color:#f0f0f0;margin:0;padding:12px;text-align:center;}
+    .top{max-width:1100px;margin:0 auto 12px auto;display:flex;gap:10px;flex-wrap:wrap;justify-content:space-between;align-items:center;}
+    .badge{background:#151515;border:1px solid #333;padding:10px 12px;border-radius:10px;box-shadow:0 4px 6px rgba(0,0,0,0.25);}
+    .badge h2{margin:0;font-size:12px;color:#bbb;font-weight:900;letter-spacing:1px;}
+    .badge .big{font-size:22px;font-weight:900;margin-top:2px;}
+    .grid{max-width:1100px;margin:0 auto;display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:12px;}
+    .card{background:#2c2c2c;padding:15px;border-radius:12px;box-shadow:0 6px 10px rgba(0,0,0,0.35);border:1px solid #3a3a3a;}
+    .device-title{font-size:20px;font-weight:900;margin-bottom:8px;letter-spacing:1px;display:flex;justify-content:space-between;align-items:center;}
+    .chip{font-size:11px;font-weight:900;padding:4px 8px;border-radius:999px;border:1px solid #444;background:#141414;color:#ddd;letter-spacing:0.7px;}
+    .chip.auto{border-color:#3b5bdb;color:#dbe4ff;}
+    .chip.manual{border-color:#666;color:#ddd;}
+    .chip.alert{border-color:#c92a2a;color:#ffd8d8;background:#2b1111;}
+    .chip.onchip{border-color:#2f9e44;color:#d3f9d8;background:#102312;}
+    .row{display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:10px;}
+    .left{display:flex;align-items:center;gap:8px;font-weight:900;}
+    .led{width:14px;height:14px;border-radius:50%;display:inline-block;}
+    .led.on{background:#35d04b;box-shadow:0 0 10px rgba(53,208,75,0.55);}
+    .led.off{background:#ff3b30;box-shadow:0 0 10px rgba(255,59,48,0.35);}
+    .meta{font-size:12px;color:#cfcfcf;opacity:0.95;}
+    .mono{font-variant-numeric:tabular-nums;}
+    .btnRow{margin-top:10px;display:flex;flex-wrap:wrap;justify-content:center;gap:8px;}
+    button{padding:10px 18px;font-size:15px;border:none;border-radius:10px;cursor:pointer;font-weight:900;letter-spacing:0.5px;}
+    .onBtn{background:#2f9e44;color:white;}
+    .offBtn{background:#c92a2a;color:white;}
+    .modeBtn{background:#3b5bdb;color:white;}
+    .timerWrap{margin-top:12px;padding:10px;background:#191919;border:1px solid #3a3a3a;border-radius:10px;text-align:left;}
+    .timerWrap h3{margin:0 0 8px 0;font-size:14px;}
+    .small{font-size:12px;color:#cfcfcf;}
+    .inputRow{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:8px;}
+    input[type=range]{width:100%;}
+    input[type=number]{background:#101010;color:#fff;border:1px solid #444;border-radius:8px;padding:8px;width:78px;font-family:inherit;font-size:14px;}
+    .applyBtn{background:#3b5bdb;color:#fff;}
+    .preview-banner{background:#3b5bdb22;border:1px solid #3b5bdb;color:#a5b4fc;font-size:12px;padding:6px 12px;border-radius:8px;margin-bottom:12px;max-width:1100px;margin-left:auto;margin-right:auto;}
+  </style>
+</head>
+<body>
+
+<div class="preview-banner">⚡ PREVIEW MODE — controls are simulated and do not connect to an ESP32</div>
+
+<!-- TOP BADGES -->
+<div class="top">
+  <div class="badge"><h2>LOCAL TIME</h2><div class="big mono" id="clock">--:--:--</div></div>
+  <div class="badge"><h2>LIGHT MODE</h2><div class="big mono" id="topLightMode">MANUAL</div></div>
+  <div class="badge"><h2>WATER MANUAL OFF</h2><div class="big mono" id="waterManualTop">CLEAR</div></div>
+  <div class="badge"><h2>WATER MANUAL ON</h2><div class="big mono" id="waterManualOnTop">CLEAR</div></div>
+</div>
+
+<h1>ESP32-S3-Relay-6CH Control Panel</h1>
+<div class="grid" id="grid"></div>
+
+<script>
+// ---- Mock state ----
+const state = {
+  light: false, water: false, pump: false, spray: false, aux1: false, aux2: false
+};
+const timers = {
+  light: 0, water: 0, pump: 0, spray: 0, aux1: 0, aux2: 0
+};
+let lightMode = 'MANUAL'; // MANUAL, VEG, FLOWER, CUSTOM
+let lightPhase = 'MANUAL'; // ON / OFF / MANUAL
+let customOnHours = 18;
+let waterManualOff = false;
+let waterManualOn = false;
+let waterLatched = false;
+
+// ---- Utilities ----
+function pad2(n){return String(n).padStart(2,'0');}
+function formatTime(sec){
+  sec=parseInt(sec);
+  if(isNaN(sec)||sec<=0)return '00:00:00';
+  let h=Math.floor(sec/3600),m=Math.floor((sec%3600)/60),s=sec%60;
+  return pad2(h)+':'+pad2(m)+':'+pad2(s);
+}
+
+// ---- Clock ----
+function updateClock(){
+  const now=new Date();
+  document.getElementById('clock').textContent=now.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit',second:'2-digit'});
+}
+
+// ---- LED + text ----
+function setLedAndText(id, on){
+  const led=document.getElementById('led_'+id);
+  const txt=document.getElementById('txt_'+id);
+  if(led) led.className='led '+(on?'on':'off');
+  if(txt) txt.textContent=on?'ON':'OFF';
+}
+
+// ---- Timer countdown ----
+function tickTimers(){
+  const keys=['light','water','pump','spray','aux1','aux2'];
+  keys.forEach(k=>{
+    if(timers[k]>0) timers[k]--;
+    const el=document.getElementById('t_'+k);
+    if(el) el.textContent=formatTime(timers[k]);
+  });
+}
+
+// ---- Light chip ----
+function refreshLightChip(){
+  const chip=document.getElementById('lightChip');
+  const topMode=document.getElementById('topLightMode');
+  if(!chip) return;
+  if(lightMode==='MANUAL'){
+    chip.textContent='MANUAL';
+    chip.className='chip manual';
+    if(topMode) topMode.textContent='MANUAL';
+  } else {
+    chip.textContent='AUTO • '+lightMode+' • '+lightPhase;
+    chip.className='chip auto';
+    if(topMode) topMode.textContent=lightMode;
+  }
+}
+
+// ---- Water chips ----
+function refreshWaterChips(){
+  const offChip=document.getElementById('waterManualChip');
+  const offTop=document.getElementById('waterManualTop');
+  const onChip=document.getElementById('waterManualOnChip');
+  const onTop=document.getElementById('waterManualOnTop');
+  const latchChip=document.getElementById('waterLatchChip');
+  if(offChip){
+    if(waterManualOff){offChip.textContent='MANUAL OFF: ACTIVE'; offChip.className='chip alert';}
+    else{offChip.textContent='MANUAL OFF: CLEAR'; offChip.className='chip manual';}
+  }
+  if(offTop) offTop.textContent=waterManualOff?'OFF ACTIVE':'CLEAR';
+  if(onChip){
+    if(waterManualOn){onChip.textContent='MANUAL ON: ACTIVE'; onChip.className='chip onchip';}
+    else{onChip.textContent='MANUAL ON: CLEAR'; onChip.className='chip manual';}
+  }
+  if(onTop) onTop.textContent=waterManualOn?'ON ACTIVE':'CLEAR';
+  if(latchChip){
+    if(waterLatched){latchChip.textContent='LATCHED'; latchChip.className='chip auto';}
+    else{latchChip.textContent='NOT LATCHED'; latchChip.className='chip manual';}
+  }
+}
+
+// ---- Tick ----
+function tick(){
+  updateClock();
+  tickTimers();
+  Object.keys(state).forEach(k => setLedAndText('t'+k[0].toUpperCase()+k.slice(1), state[k]));
+  refreshLightChip();
+  refreshWaterChips();
+}
+setInterval(tick, 1000);
+
+// ---- Controls ----
+function toggleDevice(dev, on){
+  state[dev] = on;
+  if(on && timers[dev] <= 0) timers[dev] = 0; // no auto-timer in preview
+  tick();
+}
+
+function setLightMode(mode){
+  lightMode = mode;
+  if(mode === 'MANUAL') { lightPhase = 'MANUAL'; }
+  else { lightPhase = 'ON'; state.light = true; }
+  tick();
+}
+
+function applyOnHours(){
+  const v = parseInt(document.getElementById('onHours').value);
+  customOnHours = v;
+  document.getElementById('onHoursVal').textContent = v;
+  document.getElementById('offHoursVal').textContent = (24-v);
+}
+function setOnHours(v){
+  document.getElementById('onHoursVal').textContent = v;
+  document.getElementById('offHoursVal').textContent = (24-parseInt(v));
+}
+
+function updatePresetLabel(dev, v){
+  const el=document.getElementById(dev+'_preset_label');
+  if(el) el.textContent=v+' min';
+}
+function applyPresetTimer(dev){
+  const slider=document.getElementById(dev+'_preset');
+  if(!slider) return;
+  timers[dev] = parseInt(slider.value)*60;
+}
+function applyManualTimer(dev){
+  const min=parseInt(document.getElementById(dev+'_min').value)||0;
+  let sec=parseInt(document.getElementById(dev+'_sec').value)||0;
+  if(sec>59){sec=59; document.getElementById(dev+'_sec').value=59;}
+  const total=(min*60)+sec;
+  if(total<=0){alert('Enter a time greater than 0 seconds');return;}
+  timers[dev]=total;
+}
+
+// ---- Build cards ----
+function timedControlBlock(dev){
+  return `
+    <div class="timerWrap">
+      <h3>Preset Timer</h3>
+      <div class="small mono">Selected: <span id="${dev}_preset_label">1 min</span></div>
+      <input id="${dev}_preset" type="range" min="1" max="20" step="1" value="1" oninput="updatePresetLabel('${dev}', this.value)">
+      <div class="btnRow" style="justify-content:flex-end;">
+        <button class="applyBtn" onclick="applyPresetTimer('${dev}')">APPLY PRESET</button>
+      </div>
+      <h3 style="margin-top:12px;">Manual Time Entry</h3>
+      <div class="small">Set any time using minutes and seconds</div>
+      <div class="inputRow">
+        <input id="${dev}_min" type="number" min="0" value="0" placeholder="min">
+        <input id="${dev}_sec" type="number" min="0" max="59" value="30" placeholder="sec">
+        <button class="applyBtn" onclick="applyManualTimer('${dev}')">APPLY CUSTOM</button>
+      </div>
+    </div>`;
+}
+
+function buildCard(title, emoji, devKey, timerId, showModes, isWaterCard, extraControls){
+  const on = state[devKey];
+  let titleRow = '';
+  if(showModes){
+    titleRow = `<div class="device-title"><span>${emoji} ${title}</span><span class="chip manual" id="lightChip">MANUAL</span></div>`;
+  } else if(isWaterCard){
+    titleRow = `<div class="device-title"><span>${emoji} ${title}</span><span class="chip manual" id="waterManualChip">MANUAL OFF: --</span></div>`;
+  } else {
+    titleRow = `<div class="device-title"><span>${emoji} ${title}</span></div>`;
+  }
+
+  let waterRows = '';
+  if(isWaterCard){
+    waterRows = `
+      <div class="row">
+        <div class="meta"><span class="chip manual" id="waterManualOnChip">MANUAL ON: --</span></div>
+        <div class="meta"><span class="chip manual" id="waterLatchChip">NOT LATCHED</span></div>
+      </div>`;
+  }
+
+  let modeButtons = '';
+  if(showModes){
+    modeButtons = `
+      <button class="modeBtn" onclick="setLightMode('VEG')">VEG</button>
+      <button class="modeBtn" onclick="setLightMode('FLOWER')">FLOWER</button>
+      <button class="modeBtn" onclick="setLightMode('CUSTOM')">CUSTOM</button>`;
+  }
+
+  let bottomBlock = '';
+  if(showModes){
+    bottomBlock = `
+      <div class="timerWrap">
+        <div class="small"><b>Custom Schedule</b> (24-hour cycle)</div>
+        <div class="small mono">ON: <span id="onHoursVal">${customOnHours}</span>h | OFF: <span id="offHoursVal">${24-customOnHours}</span>h</div>
+        <input id="onHours" type="range" min="1" max="24" value="${customOnHours}" oninput="setOnHours(this.value)">
+        <div class="btnRow" style="justify-content:flex-end;">
+          <button class="modeBtn" onclick="applyOnHours()">APPLY</button>
+        </div>
+      </div>`;
+  } else if(extraControls){
+    bottomBlock = timedControlBlock(devKey);
+  }
+
+  return `
+    <div class="card">
+      ${titleRow}
+      ${waterRows}
+      <div class="row">
+        <div class="left">
+          <div class="led ${on?'on':'off'}" id="led_${timerId}"></div>
+          <span id="txt_${timerId}">${on?'ON':'OFF'}</span>
+        </div>
+        <div class="meta mono">Countdown: <span id="t_${devKey}">00:00:00</span></div>
+      </div>
+      <div class="btnRow">
+        <button class="onBtn" onclick="toggleDevice('${devKey}',true)">ON</button>
+        <button class="offBtn" onclick="toggleDevice('${devKey}',false)">OFF</button>
+        ${modeButtons}
+      </div>
+      ${bottomBlock}
+    </div>`;
+}
+
+document.getElementById('grid').innerHTML =
+  buildCard('LIGHT','💡','light','tLight', true,  false, false) +
+  buildCard('WATER','💧','water','tWater', false, true,  true)  +
+  buildCard('PUMP', '⚡','pump', 'tPump',  false, false, true)  +
+  buildCard('SPRAY','🌊','spray','tSpray', false, false, true)  +
+  buildCard('AUX 1','🧰','aux1', 'tAux1',  false, false, true)  +
+  buildCard('AUX 2','🧲','aux2', 'tAux2',  false, false, true);
+
+tick();
+</script>
+</body>
+</html>
